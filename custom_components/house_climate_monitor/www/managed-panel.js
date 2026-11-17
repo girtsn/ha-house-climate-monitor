@@ -19,6 +19,52 @@ export function decodeHistoryResponse(data, ids) {
   return output;
 }
 
+/** Explain why a per-room incident is still active without hiding source disagreement. */
+export function describeIncidentSources(key, incident, sources, options = {}) {
+  const pipe = key.lastIndexOf('|');
+  const room = pipe < 0 ? key : key.slice(0, pipe);
+  const rule = pipe < 0 ? '' : key.slice(pipe + 1);
+  const metric = rule === 'temp_low' || rule === 'temp_high' ? 'temperature' :
+    rule === 'voc' ? 'voc_index' : rule.startsWith('safety:') ? 'safety' : rule;
+  const limits = {
+    humidity: ['humidity_high', 70, 'humidity_recovery', 65, 'humidity_recovery_minutes', 30],
+    temp_low: ['temp_low_c', 17.5, 'temp_recovery_c', 18, 'temp_recovery_minutes', 10],
+    temp_high: ['temp_high_c', 45, 'temp_high_recovery_c', 38, 'temp_high_recovery_minutes', 10],
+    pm25: ['pm25_warning', 35, 'pm25_recovery', 25, 'pm25_recovery_minutes', 15],
+    co2: ['co2_warning', 1500, 'co2_recovery', 1000, 'co2_recovery_minutes', 30],
+    voc: ['voc_elevated_index', 200, 'voc_elevated_index', 200, 'voc_recovery_minutes', 30],
+  };
+  const policy = limits[rule];
+  const warning = policy ? Number(options[policy[0]] ?? policy[1]) : null;
+  const recovery = policy ? Number(options[policy[2]] ?? policy[3]) : null;
+  const recoveryMinutes = policy ? Number(options[policy[4]] ?? policy[5]) : null;
+  const affected = new Set(incident?.implicated ?? []);
+  const selected = (sources ?? []).filter(s => s.selected && s.metric === metric &&
+    (room === 'Household' && metric === 'voc_index' || s.room === room) &&
+    (!rule.startsWith('safety:') || rule === 'safety:' + s.entity_id));
+  const rows = selected.map(s => {
+    const valid = Boolean(s.fresh && s.value != null && Number.isFinite(Number(s.value)));
+    const value = valid ? Number(s.value) : null;
+    const implicated = affected.has(s.entity_id);
+    const blocksRecovery = rule === 'temp_low'
+      ? (valid ? value < recovery : implicated)
+      : (valid ? recovery != null && value > recovery : implicated);
+    const condition = !valid ? (implicated ? 'No fresh reading — recovery blocked' : 'No fresh reading')
+      : blocksRecovery ? 'Above/below recovery limit — still blocking'
+      : implicated ? 'Previously elevated — now normal' : 'Normal';
+    return {entity_id: s.entity_id, name: s.name, unit: s.unit, value: s.value,
+      fresh: valid, implicated, blocksRecovery, condition};
+  });
+  const good = rows.filter(r => r.fresh);
+  const values = good.map(r => Number(r.value));
+  const disagreement = rule === 'humidity' && values.length >= 2
+    ? Math.max(...values) - Math.min(...values) : null;
+  const allReady = good.length > 0 && rows.every(r => !r.blocksRecovery) && policy != null;
+  return {room, rule, warning, recovery, recoveryMinutes, rows,
+    disagreement, allReady, hasAffected: affected.size > 0,
+    pendingRecoverySince: incident?.recovery_since ?? null};
+}
+
 const version=new URL(import.meta.url).searchParams.get('v')||'dev';
 const TAG='house-climate-monitor-panel-v'+version.replace(/\./g,'-');
 const TABS=['Overview','Temperature','Humidity','PM2.5','VOC','CO₂','Emergencies','Incidents','Sensors'];
@@ -26,6 +72,19 @@ const METRIC={Temperature:'temperature',Humidity:'humidity','PM2.5':'pm25',VOC:'
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dt=t=>t?new Date(t).toLocaleString(): '—';
 const fmt=v=>v===null||v===undefined?'—':Number.isFinite(Number(v))?Number(v).toFixed(1):String(v);
+const evidenceHTML=(key,state,sources,options)=>{
+ const diag=describeIncidentSources(key,state,sources,options);
+ const policy=diag.recovery==null?'':`<p class="note">Alert threshold: ${fmt(diag.warning)}. Recovery requires ${diag.rule==='temp_low'?'at least':'at most'} ${fmt(diag.recovery)} for ${fmt(diag.recoveryMinutes)} minutes. This uses every selected reporting sensor, not an average.</p>`;
+ const readings=diag.rows.map(r=>`<div class="evidence-source"><b>${esc(r.name)}: ${r.value==null?'—':fmt(r.value)} ${esc(r.unit)}</b><small>${esc(r.entity_id)}</small><small class="${r.blocksRecovery?'warn':'sub'}">${esc(r.condition)}${r.implicated?' · Affected this incident':''}</small></div>`).join('');
+ const discrepancy=diag.disagreement!=null&&diag.disagreement>=15
+   ? `<p class="warn">Sensors disagree by ${fmt(diag.disagreement)} percentage points. Compare locations and calibration; no source is automatically discarded.</p>` : '';
+ const recovery=diag.pendingRecoverySince
+   ? `<p class="ok">Recovery confirmation started ${esc(dt(Number(diag.pendingRecoverySince)*1000))}; a notification follows only when the full interval completes.</p>`
+   : diag.allReady
+     ? '<p class="sub">Readings meet the recovery limit; confirmation has not yet started in the monitoring state.</p>'
+     : '<p class="sub">Recovery is not yet confirmed. Inspect the readings above for blockers.</p>';
+ return `<p class="sub">Trigger: ${esc(state.last_reason||'Not recorded')}</p>${policy}<div class="evidence-list">${readings||'<p class="note">No selected source is currently reporting for this incident.</p>'}</div>${discrepancy}${recovery}`;
+};
 function getRange(mode,anchor=new Date(),offset=0){
  const now=new Date(),e=new Date(anchor),s=new Date(anchor),day=86400000;
  let length=7*day;
@@ -55,6 +114,7 @@ button:hover{filter:brightness(.96)}button:disabled{opacity:.5;cursor:not-allowe
 .warn{color:var(--error-color,#c62828)}.ok{color:var(--success-color,#278447)}.list{display:flex;flex-direction:column;gap:8px}.incident{border-left:4px solid var(--error-color,#c62828)}.incident.resolved{border-left-color:var(--success-color,#278447)}
 .table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{padding:8px;border-bottom:1px solid var(--divider-color,#ddd);vertical-align:top;text-align:left}.table th{position:sticky;top:0;background:var(--card-background-color,#fff)}.table td small{display:block;color:var(--secondary-text-color,#666);margin-top:3px}
 .graph{height:250px;width:100%;background:var(--card-background-color,#fff)}.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:8px}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}.note{margin:12px 0;color:var(--secondary-text-color,#666);font-size:13px}.problem{padding:11px;color:var(--error-color,#c62828)}
+.evidence-list{display:flex;flex-direction:column;gap:5px;margin-top:10px}.evidence-source{border-left:2px solid var(--divider-color,#ddd);padding:5px 10px}.evidence-source small{display:block;color:var(--secondary-text-color,#666);overflow-wrap:anywhere;margin-top:3px}.evidence-source small.warn{color:var(--error-color,#c62828)}
 .room-select{min-width:230px}code{word-break:break-all;font-size:12px}a{color:var(--primary-color,#1976d2)}@media(max-width:650px){.shell{padding:12px 10px 40px}.header h1{font-size:20px}.card{padding:12px}.toolbar button{padding:7px}}
 `;
 class HouseClimateMonitorPanel extends HTMLElement {
@@ -121,7 +181,7 @@ class HouseClimateMonitorPanel extends HTMLElement {
   return `<div class="grid">${card('Temperature','temperature')}${card('Humidity','humidity')}${card('PM2.5','pm25')}${card('VOC index','voc_index')}${card('CO₂','co2')}</div>
     <div class="grid"><div class="card"><h3>Active incidents</h3><div class="metric ${active.length?'warn':'ok'}">${active.length}</div><p class="sub">Room-based incidents; recent alerts and recoveries below</p></div>
     <div class="card"><h3>Email queue</h3><div class="metric">${this._data.email?.pending||0}</div><p class="sub">Last accepted: ${esc(dt(this._data.email?.last_accepted))}</p>${this._data.email?.last_error?`<p class="warn">${esc(this._data.email.last_error)}</p>`:''}<button data-role="test-email">Send test email</button><p class="note">Actually invokes the configured Home Assistant notify entity.</p></div></div>
-    <div class="card"><h3>Active room alerts</h3>${active.length?active.map(([key,s])=>`<div class="incident card"><b>${esc(key)}</b> · ${esc(s.level)}<div class="sub">Since ${esc(dt(s.since))} · Worst reading ${fmt(s.peak)}</div></div>`).join(''):'<p class="ok">No confirmed active incidents.</p>'}</div>
+    <div class="card"><h3>Active room alerts</h3><p class="note">Peak is historical, not the current reading. All currently selected sources are shown below.</p>${active.length?active.map(([key,s])=>`<div class="incident card"><b>${esc(key)}</b> · ${esc(s.level)}<div class="sub">Since ${esc(dt(s.since))} · Historical worst ${fmt(s.peak)}</div>${evidenceHTML(key,s,sources,this._data?.options||{})}</div>`).join(''):'<p class="ok">No confirmed active incidents.</p>'}</div>
     <div class="card"><h3>Monitored rooms</h3>${rooms.map(room=>`<span class="chip">${esc(room)}</span>`).join('')}</div>`;
  }
  _tabMetric(){const metric=METRIC[this._tab], sources=this._sources().filter(x=>x.selected&&x.metric===metric);
