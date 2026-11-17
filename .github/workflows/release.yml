@@ -1,0 +1,49 @@
+name: Publish validated House Climate Monitor release
+
+on:
+  workflow_run:
+    workflows: ["Validate"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the validated commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Publish actual GitHub Release (not a branch or tag alone)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [[ "$VALIDATED_SHA" != "$current_sha" ]]; then
+            echo "Skipping stale build $VALIDATED_SHA; main is $current_sha"
+            exit 0
+          fi
+          VERSION="$(python3 -c 'import json;print(json.load(open("custom_components/house_climate_monitor/manifest.json"))["version"])')"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version: $VERSION"; exit 1; }
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists"
+            exit 0
+          fi
+          NOTES="RELEASE_NOTES_$VERSION.md"
+          test -f "$NOTES"
+          gh release create "v$VERSION" \
+            --target "$VALIDATED_SHA" \
+            --title "House Climate Monitor v$VERSION" \
+            --notes-file "$NOTES"

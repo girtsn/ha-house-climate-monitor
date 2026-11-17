@@ -1,0 +1,63 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile Python
+        run: python -m compileall -q custom_components tests
+      - name: Run isolated state-machine unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Validate UI JavaScript syntax
+        run: |
+          node --input-type=module --check < custom_components/house_climate_monitor/www/panel-loader.js
+          node --input-type=module --check < custom_components/house_climate_monitor/www/managed-panel.js
+      - name: Validate HACS metadata, locales and versioned notes
+        run: |
+          python -m json.tool hacs.json >/dev/null
+          python -m json.tool custom_components/house_climate_monitor/manifest.json >/dev/null
+          python -m json.tool custom_components/house_climate_monitor/strings.json >/dev/null
+          python -m json.tool custom_components/house_climate_monitor/translations/en.json >/dev/null
+          python - <<'PY'
+          import json, re
+          from pathlib import Path
+          manifest=json.loads(Path('custom_components/house_climate_monitor/manifest.json').read_text())
+          hacs=json.loads(Path('hacs.json').read_text())
+          v=manifest['version']
+          assert re.fullmatch(r'\d+\.\d+\.\d+',v),v
+          assert manifest['domain']=='house_climate_monitor'
+          assert manifest['documentation']=='https://github.com/girtsn/ha-house-climate-monitor'
+          assert hacs['hide_default_branch'] is True
+          assert Path(f'RELEASE_NOTES_{v}.md').exists()
+          assert Path('custom_components/house_climate_monitor/brand/icon.png').exists()
+          PY
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+          # Remove this exception after one-time GitHub repo topics setup.
+          ignore: topics
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Home Assistant integration
+        uses: home-assistant/actions/hassfest@master

@@ -1,0 +1,130 @@
+{
+  "title": "House Climate Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure climate monitoring",
+        "description": "Select an existing notify entity capable of sending email. Real notifications are enabled by default.",
+        "data": {
+          "notify_entity": "Notification entity",
+          "notifications_enabled": "Send real notifications",
+          "auto_include": "Automatically include eligible room sensors"
+        }
+      }
+    },
+    "error": {
+      "notify_missing": "The selected notification entity is not available"
+    },
+    "abort": {
+      "single_instance_allowed": "Only one House Climate Monitor instance is supported"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Choose Climate Monitor settings",
+        "menu_options": {
+          "notifications": "Notifications",
+          "temperature": "Low temperature",
+          "humidity": "Humidity",
+          "particles": "PM2.5",
+          "voc": "VOC index",
+          "emergency": "Abnormal heat and safety",
+          "discovery": "Sensor discovery",
+          "co2": "CO\u2082"
+        }
+      },
+      "notifications": {
+        "title": "Email notifications",
+        "data": {
+          "notify_entity": "Email notify entity",
+          "notifications_enabled": "Enable real emails",
+          "subject_prefix": "Subject prefix",
+          "email_retry_minutes": "Retry after minutes"
+        }
+      },
+      "temperature": {
+        "title": "Low temperature and recovery",
+        "data": {
+          "temp_low_c": "Cold threshold (\u00b0C)",
+          "temp_low_minutes": "Cold confirmation (minutes)",
+          "temp_recovery_c": "Recovered at (\u00b0C)",
+          "temp_recovery_minutes": "Recovery confirmation (minutes)"
+        }
+      },
+      "humidity": {
+        "title": "Humidity and recovery",
+        "data": {
+          "humidity_high": "High RH (%)",
+          "humidity_minutes": "High confirmation (minutes)",
+          "humidity_recovery": "Recovery RH (%)",
+          "humidity_recovery_minutes": "Recovery confirmation (minutes)",
+          "humidity_severe": "Severe humidity (%)",
+          "humidity_severe_minutes": "Severe humidity confirmation minutes"
+        }
+      },
+      "particles": {
+        "title": "PM2.5 rules",
+        "data": {
+          "pm25_warning": "Warning (\u00b5g/m\u00b3)",
+          "pm25_warning_minutes": "Warning minutes",
+          "pm25_severe": "Severe (\u00b5g/m\u00b3)",
+          "pm25_severe_minutes": "Severe minutes",
+          "pm25_extreme": "Extreme (\u00b5g/m\u00b3)",
+          "pm25_extreme_minutes": "Extreme minutes",
+          "pm25_recovery": "Recovery (\u00b5g/m\u00b3)",
+          "pm25_recovery_minutes": "Recovery minutes",
+          "pm25_daily_enabled": "Enable daily 24-hour-average email",
+          "pm25_daily_threshold": "24h-average threshold",
+          "pm25_daily_hour": "Local hour for daily check"
+        }
+      },
+      "voc": {
+        "title": "VOC episodes",
+        "data": {
+          "voc_elevated_index": "Elevated VOC index",
+          "voc_severe_index": "Severe VOC index",
+          "voc_severe_minutes": "Severe confirmation minutes",
+          "voc_multiroom_count": "Minimum distinct affected rooms",
+          "voc_multiroom_minutes": "Multiroom confirmation minutes",
+          "voc_recovery_minutes": "Recovery minutes"
+        }
+      },
+      "emergency": {
+        "title": "Abnormal heat and optional forwarding",
+        "description": "Ambient temperature monitoring is not a certified fire detector. Keep standalone smoke/CO alarms.",
+        "data": {
+          "temp_high_c": "High heat (\u00b0C)",
+          "temp_high_minutes": "High heat confirmation minutes",
+          "temp_critical_c": "Critical heat (\u00b0C)",
+          "temp_critical_minutes": "Critical heat confirmation minutes",
+          "temp_rapid_rise_c": "Rapid rise (\u00b0C)",
+          "temp_rapid_rise_minutes": "Rapid rise time window (minutes)",
+          "temp_rapid_rise_min_c": "Rapid rise minimum temperature (\u00b0C)",
+          "temp_high_recovery_c": "High heat recovered at (\u00b0C)",
+          "temp_high_recovery_minutes": "High heat recovery minutes",
+          "safety_alarm_forwarding": "Forward explicitly included existing smoke/CO/gas/heat alarm entities (may duplicate alerts)"
+        }
+      },
+      "discovery": {
+        "title": "Discovery",
+        "data": {
+          "auto_include": "Automatically include eligible ambient sensors",
+          "freshness_minutes": "Maximum reading age (minutes)"
+        }
+      },
+      "co2": {
+        "title": "Carbon dioxide (CO\u2082)",
+        "description": "Indoor air-quality indicators only. CO\u2082 is different from carbon monoxide (CO).",
+        "data": {
+          "co2_warning": "Warning (ppm)",
+          "co2_warning_minutes": "Warning confirmation minutes",
+          "co2_severe": "Severe (ppm)",
+          "co2_severe_minutes": "Severe confirmation minutes",
+          "co2_recovery": "Recovered below (ppm)",
+          "co2_recovery_minutes": "Recovery confirmation minutes"
+        }
+      }
+    }
+  }
+}
