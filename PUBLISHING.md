@@ -1,26 +1,23 @@
-# Publishing House Climate Monitor as a release-based HACS repository
+# Publishing and installing House Climate Monitor
 
-The new GitHub repository itself must exist before a GitHub Release can be published. The build package includes repository and CI contents; it does not create the GitHub repository or a live Home Assistant installation.
+Repository: https://github.com/girtsn/ha-house-climate-monitor
 
-## One-time publishing procedure
+## Automated release process
 
-1. Authenticate GitHub CLI locally with `gh auth login`, using an account allowed to create repositories under `girtsn`.
-2. Extract the source ZIP and run the following inside its `ha-house-climate-monitor/` directory:
+The `main` branch contains the reusable Home Assistant integration. Every push runs `.github/workflows/validate.yaml`, which checks Python and JavaScript, isolated tests, HACS compliance and Home Assistant hassfest. `.github/workflows/release.yml` triggers only after a successful validation run for the current `main` commit. It reads the version from `custom_components/house_climate_monitor/manifest.json` and creates a matching GitHub Release (`vX.Y.Z`) with `RELEASE_NOTES_X.Y.Z.md`.
 
-```bash
-git init -b main
-git add .
-git commit -m "Initial House Climate Monitor v0.1.0"
-gh repo create girtsn/ha-house-climate-monitor --public --source=. --remote=origin --push
-```
+The file `hacs.json` contains `hide_default_branch: true` so HACS users select the published release, not `main`. Each future version change should update the manifest version and add matching release notes. Do not modify an existing published release/tag in place.
 
-3. Open the repository Settings → Actions → General and allow Actions to create and approve pull requests only if needed; **the release workflow needs Contents: read and write permission**, configured in the workflow. Ensure Actions are enabled.
-4. Add GitHub repository topics including `home-assistant`, `hacs`, `home-assistant-custom-component` if HACS recommends them; remove the `ignore: topics` workaround afterward.
-5. Watch GitHub **Actions → Validate**. Once its run for the current `main` commit is successful, **Publish validated House Climate Monitor release** will create `v0.1.0`. Check it appears under **Releases**, not just under Tags.
-6. Add the GitHub URL as a custom **Integration** in HACS / Marketplace. Choose the published release (not `main`).
+## HACS installation — no manual configuration YAML
 
-A failed CI run does not publish a release. On subsequent updates, increment both `manifest.json` version and release-notes filename, then push to `main`; the release workflow creates a matching release after validation.
+1. In Home Assistant HACS / Marketplace add `https://github.com/girtsn/ha-house-climate-monitor` as a **custom integration** repository.
+2. Install the newest **published GitHub Release**, then restart Home Assistant.
+3. In **Settings → Devices & Services → Add integration**, select **House Climate Monitor** and choose an existing email-capable `notify.*` entity (such as `notify.email_family`).
+4. Use the automatically registered **Climate Monitor** sidebar dashboard to review discovered sensors, exclude irrelevant entities and assign rooms to unmapped sources. Use **Send test email** on the Overview tab and confirm actual delivery to the mailbox.
+5. Adjust thresholds, persistence periods and recipient via **Configure** in Devices & Services. When confirmed operational, disable the overlapping old environmental *email* automations to prevent duplicate messages. Keep smoke/CO/gas safety alarms and separate diagnostic integrations enabled.
 
-## Manual installation before repository publication
+The custom integration owns its runtime, sensor discovery, incident and recovery state, email queue, dashboard assets and private persistence; no manual YAML, helper entities or dashboard cards are necessary. Existing Home Assistant notification entities are external prerequisites; the integration does not configure SMTP itself.
 
-Copy the `custom_components/house_climate_monitor/` folder to `/config/custom_components/house_climate_monitor/`, restart, and add the integration through Settings → Devices & services. This does not use HACS, so no GitHub Release is needed. Confirm which other climate automations are active before enabling new emails to avoid duplicates.
+## Validation and limitations
+
+A green CI run means the static checks and isolated tests passed. End-to-end behavior and email delivery must still be checked in the user's Home Assistant. This software is **not a certified fire, smoke, carbon-monoxide or gas detector**. Do not use it as the primary emergency alert system.
