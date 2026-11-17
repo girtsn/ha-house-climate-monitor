@@ -24,6 +24,8 @@ jobs:
         run: |
           node --input-type=module --check < custom_components/house_climate_monitor/www/panel-loader.js
           node --input-type=module --check < custom_components/house_climate_monitor/www/managed-panel.js
+      - name: Test Recorder history WebSocket decoding
+        run: node tests/test_history_response.cjs
       - name: Validate HACS metadata, locales and versioned notes
         run: |
           python -m json.tool hacs.json >/dev/null

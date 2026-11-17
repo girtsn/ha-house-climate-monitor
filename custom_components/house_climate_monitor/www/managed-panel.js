@@ -1,6 +1,24 @@
 /* Standalone read-only trend panel with admin source selection.
  * Uses HA Recorder for measurements; diagnostic history is stored locally.
  */
+/** Decode HA history/history_during_period object keyed by entity ID. */
+export function decodeHistoryResponse(data, ids) {
+  const response = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  const output = {};
+  for (const id of ids) {
+    const states = Array.isArray(response[id]) ? response[id] : [];
+    output[id] = states.map(point => {
+      const rawTime = point?.lu ?? point?.lc;
+      const time = Number.isFinite(Number(rawTime)) ? Number(rawTime) * 1000 :
+        Date.parse(point?.last_changed ?? point?.last_updated ?? '');
+      const rawValue = point?.s ?? point?.state;
+      const value = rawValue === '' || rawValue == null ? NaN : Number(rawValue);
+      return [time, value];
+    }).filter(([time, value]) => Number.isFinite(time) && Number.isFinite(value));
+  }
+  return output;
+}
+
 const version=new URL(import.meta.url).searchParams.get('v')||'dev';
 const TAG='house-climate-monitor-panel-v'+version.replace(/\./g,'-');
 const TABS=['Overview','Temperature','Humidity','PM2.5','VOC','CO₂','Emergencies','Incidents','Sensors'];
@@ -74,8 +92,8 @@ class HouseClimateMonitorPanel extends HTMLElement {
   try{let result={};const days=(new Date(this._range.end)-new Date(this._range.start))/86400000;
    if(days>30){const data=await this._hass.callWS({type:'recorder/statistics_during_period',start_time:this._range.start,end_time:this._range.end,statistic_ids:ids,period:days>400?'month':days>95?'week':'day',types:['mean','min','max']});
     for(const id of ids)result[id]=(data[id]||[]).filter(x=>x.mean!==null&&x.mean!==undefined).map(x=>[new Date(x.start).getTime(),x.mean]);
-   }else{const data=await this._hass.callWS({type:'history/history_during_period',start_time:this._range.start,end_time:this._range.end,entity_ids:ids,significant_changes:false,minimal_response:false,no_attributes:true});
-    for(const row of data)if(row?.length){const id=row[0].entity_id;result[id]=row.map(x=>[new Date(x.lu?x.lu*1000:x.last_changed).getTime(),Number(x.s??x.state)]).filter(x=>Number.isFinite(x[0])&&Number.isFinite(x[1]));}
+   }else{const data=await this._hass.callWS({type:'history/history_during_period',start_time:this._range.start,end_time:this._range.end,entity_ids:ids,significant_changes_only:false,minimal_response:false,no_attributes:true});
+    result=decodeHistoryResponse(data,ids);
    }
    if(token===this._graphToken)this._graph={result,ids};
   }catch(e){if(token===this._graphToken)this._graph={error:'Recorder history could not be loaded: '+(e.message||e)};}
