@@ -277,6 +277,12 @@ class IncidentRules:
                 continue
             entry["implicated"] = [eid for eid in entry["implicated"] if eid != entity_id]
             entry["recovery_since"] = None
+            if entry["implicated"]:
+                # The old peak may have come solely from the removed source;
+                # never keep presenting that peak as a physical reading.
+                entry["peak"] = None
+                entry["last_reason"] = reason
+                entry.get("source_evidence", {}).pop(entity_id, None)
             if not entry["implicated"]:
                 events.append(self._event("retired", key, entry, entry["level"], [], now, reason))
                 entry.update(active=False, level="", peak=None, since=None,

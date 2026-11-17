@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Iterable
+import re
 
 NON_AMBIENT = (
     "outdoor", "outside", "yard motion", "garden", "outside yard", "sauna",
@@ -17,6 +18,20 @@ NON_AMBIENT = (
     "heat pump compressor", "hot water", "pcb", "interface temperature",
     "24h", "24 hour", "average", "moving average", "statistics", "rolling",
 )
+# Some integrations (notably Renson Waves) publish configuration bounds as
+# sensor.* entities with a humidity device class and '%' unit. These are NOT
+# measurements and must never participate in monitoring, even if an old
+# selection override explicitly included them.
+CONFIGURATION_WORDS = {"minimum", "maximum", "min", "max", "threshold", "setpoint", "limit"}
+CONFIGURATION_REASON = "configuration limit / min-max setting, not a live measurement"
+
+
+def is_configuration_value(entity_id: str, name: str) -> bool:
+    """Identify numeric configuration limits independent of device class/unit."""
+    words = set(re.findall(r"[a-z0-9]+", f"{entity_id} {name}".lower()))
+    return bool(CONFIGURATION_WORDS & words or {"set", "point"} <= words or {"upper", "bound"} <= words or {"lower", "bound"} <= words)
+
+
 CO2_SAFETY = {"smoke", "carbon_monoxide", "gas", "heat"}
 VALID_PM_UNITS = {"µg/m³", "μg/m³", "ug/m3", "µg/m3", "ug/m³"}
 
@@ -55,6 +70,20 @@ def classify(entity_id: str, name: str, attributes: dict) -> tuple[str | None, s
         return "temperature", "climate current_temperature attribute"
     if not entity_id.startswith("sensor."):
         return None, "unsupported entity domain"
+    # Do not infer live environmental values from units/device_class alone.
+    # Keep invalid candidates visible in the Sources tab with an explanation.
+    if is_configuration_value(entity_id, name):
+        if "voc" in lower:
+            return "voc_other", CONFIGURATION_REASON
+        if dclass == "humidity" or "humidity" in lower:
+            return "humidity", CONFIGURATION_REASON
+        if dclass == "temperature" or "temperature" in lower or unit in {"°C", "°F"}:
+            return "temperature", CONFIGURATION_REASON
+        if dclass == "pm25" or "pm2_5" in lower or "pm25" in lower or "pm2.5" in lower:
+            return "pm25", CONFIGURATION_REASON
+        if dclass == "carbon_dioxide" or "co2" in lower:
+            return "co2", CONFIGURATION_REASON
+        return None, "configuration value without a climate measurement"
     if "voc" in lower:
         # Renson raw or estimated scales are not IKEA VOC indices.
         if "voc_index" in entity_id or "voc index" in lower or dclass == "volatile_organic_compounds_index":
@@ -160,7 +189,12 @@ def discover(hass, overrides: dict[str, dict], options: dict, now: float | None 
             selected = bool(options.get("auto_include", True)) and eligible
             if not options.get("auto_include", True) and eligible:
                 reason = "awaiting manual inclusion"
-        if metric == "voc_other":
+        # Hard exclusion is intentional: the user may override an unusual
+        # physical source, but cannot turn a fixed max/min threshold into a
+        # room measurement. Old "include" overrides are safely neutralized.
+        if eid.startswith("sensor.") and is_configuration_value(eid, state.name or eid):
+            eligible, selected, reason = False, False, CONFIGURATION_REASON
+        elif metric == "voc_other":
             selected = False
             if selection == "include":
                 reason = "display only: source has no calibrated VOC-index rule"

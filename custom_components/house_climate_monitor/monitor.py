@@ -11,7 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (DOMAIN, DEFAULTS, STORAGE_KEY, HISTORY_KEY, STORAGE_VERSION,
                     MAX_HISTORY, HISTORY_DAYS)
-from .discovery import discover
+from .discovery import discover, CONFIGURATION_REASON
 from .rules import IncidentRules
 
 _LOGGER = logging.getLogger(__name__)
@@ -150,12 +150,63 @@ class ClimateMonitor:
             self.record({"kind": "suppressed", "when": event["when"],
                          "id": event["id"], "reason": "Notifications disabled", "key": event["key"]})
 
+    def _reconcile_excluded_sources(self, now: float):
+        """Retire no-longer-selected sources before evaluating/sending alerts.
+
+        Previously monitored HA entity values can become ineligible after an
+        integration update (e.g. Renson humidity 'static maximum' settings).
+        Removing them must not generate a fake room-recovery email or leave
+        a pending false alert queued. We do not retire missing entities,
+        because an absent/stale *physical* sensor is not proof of recovery.
+        """
+        excluded = {r.entity_id: r for r in self.readings if not r.selected}
+        for eid, r in excluded.items():
+            if r.reason == CONFIGURATION_REASON and self.overrides.get(eid, {}).get("selection") == "include":
+                self.overrides[eid]["selection"] = "auto"
+                self.record({
+                    "kind": "source_excluded", "when": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                    "key": eid, "reason": f"Old include override neutralized: {CONFIGURATION_REASON}",
+                })
+            for event in self.rules.retire_source(
+                eid, now, f"Monitoring source excluded: {r.reason}"
+            ):
+                self.record(event)
+        # Prevent previously queued emails based on excluded entities from
+        # arriving after a corrected version of the integration is installed.
+        retained = []
+        for item in self.queue:
+            event = item.get("event", {})
+            ids = set(event.get("implicated") or [])
+            blocked = ids & excluded.keys()
+            if not blocked:
+                retained.append(item)
+                continue
+            remaining = ids - blocked
+            if not remaining:
+                self.record({
+                    "kind": "email_cancelled",
+                    "when": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                    "key": event.get("key", ""), "event_id": event.get("id"),
+                    "reason": "Pending notification cancelled: all implicated sources were excluded",
+                })
+                continue
+            # Retain genuine ongoing events, but never send misleading
+            # thresholds, peaks or rows from now-excluded sources.
+            event["implicated"] = sorted(remaining)
+            event["readings"] = [row for row in event.get("readings", [])
+                                 if row.get("entity_id") not in blocked]
+            event["peak"] = None
+            event["reason"] = "Alert continues for selected live sources; excluded readings were removed"
+            retained.append(item)
+        self.queue = retained
+
     async def refresh(self):
         if not self.running or self._lock.locked():
             return
         async with self._lock:
             now = ts()
             self.readings = discover(self.hass, self.overrides, self.options, now)
+            self._reconcile_excluded_sources(now)
             self._sample_pm(now)
             for event in self.rules.evaluate(self.readings, self.options, now):
                 self._new_event(event)
@@ -236,6 +287,8 @@ class ClimateMonitor:
         if entity_id not in {r.entity_id for r in self.readings}:
             raise ValueError("Entity is not an identified climate/safety candidate")
         source = next((r for r in self.readings if r.entity_id == entity_id), None)
+        if selection == "include" and source and source.reason == CONFIGURATION_REASON:
+            raise ValueError("Configuration limits are not room measurements and cannot be monitored")
         if selection == "include" and source and source.metric == "voc_other":
             raise ValueError("Other VOC scales are display-only until a scale-specific alert rule is configured")
         data = {"selection": selection}

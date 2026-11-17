@@ -97,3 +97,66 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.mon.pm24_average(rows[-2:],now))
 
 if __name__=='__main__':unittest.main()
+
+class LegacyHumidityAlertMigrationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.services = FakeServices()
+        hass = SimpleNamespace(services=self.services, states=FakeStates())
+        self.mon = monitor.ClimateMonitor(hass, SimpleNamespace(data={}, options={}, version=1))
+        self.now = monitor.ts()
+        self.room = '2fl bathroom'
+        self.bad = ['sensor.2fl_bathroom_2fl_vent_waves_humidity_static_maximum',
+                    'sensor.2fl_bathroom_2fl_vent_waves_humidity_static_minimum']
+        self.live = 'sensor.2fl_vent_waves_humidity'
+
+    def _readings(self, live_value=54):
+        from climatestub.discovery import Reading, CONFIGURATION_REASON
+        # In the pre-fix build the 80% setting was included in the alert.
+        return [
+            Reading(self.live, 'Renson humidity', self.room, 'humidity', live_value, '%',
+                    True, self.now, True, 'ambient relative humidity', True, 'sensor'),
+            *[Reading(eid, eid, self.room, 'humidity', value, '%', True,
+                      self.now, False, CONFIGURATION_REASON, False, 'sensor')
+              for eid, value in zip(self.bad, [80, 75])]
+        ]
+
+    async def _refresh_with(self, readings):
+        old = monitor.discover
+        monitor.discover = lambda hass, overrides, options, now: readings
+        try:
+            await self.mon.refresh()
+        finally:
+            monitor.discover = old
+
+    async def test_old_false_humidity_alert_is_retired_without_recovery_email(self):
+        key = self.room + '|humidity'
+        state = self.mon.rules._state(key)
+        state.update(active=True, level='warning', implicated=list(self.bad),
+                     peak=80, since=datetime.now(timezone.utc).isoformat(),
+                     last_reason='humidity static maximum qualified for warning')
+        fake = {'id': 'old-false', 'kind': 'alert', 'key': key, 'metric': 'humidity',
+                'room': self.room, 'level': 'warning', 'reason': state['last_reason'],
+                'implicated': list(self.bad), 'peak': 80,
+                'when': datetime.now(timezone.utc).isoformat(),
+                'readings': [{'entity_id': eid, 'value': 80} for eid in self.bad]}
+        self.mon.queue = [{'event': fake, 'attempts': 0, 'next_retry': 0}]
+        await self._refresh_with(self._readings())
+        self.assertFalse(state['active'])
+        self.assertFalse(self.mon.queue)
+        self.assertFalse(self.services.calls)
+        self.assertEqual([x['kind'] for x in self.mon.history if x['kind'] == 'retired'], ['retired'])
+        self.assertTrue(any(x['kind'] == 'email_cancelled' for x in self.mon.history))
+        self.assertFalse(any(x['kind'] == 'recovery' for x in self.mon.history))
+
+    async def test_real_humidity_alert_remains_when_invalid_peak_source_removed(self):
+        key = self.room + '|humidity'
+        state = self.mon.rules._state(key)
+        state.update(active=True, level='warning',
+                     implicated=[self.live, self.bad[0]], peak=80,
+                     since=datetime.now(timezone.utc).isoformat(),
+                     last_reason='humidity static maximum qualified for warning')
+        await self._refresh_with(self._readings(live_value=74))
+        self.assertTrue(state['active'])
+        self.assertEqual(state['implicated'], [self.live])
+        self.assertEqual(state['peak'], 74)
+        self.assertFalse(any(x['kind'] == 'recovery' for x in self.mon.history))

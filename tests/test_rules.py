@@ -155,3 +155,47 @@ class VOCEvidenceTests(unittest.TestCase):
         self.assertEqual(recovered[0]['kind'],'recovery')
         self.assertEqual(recovered[0]['source_evidence']['a']['peak'],300)
         self.assertEqual(m.states['Household|voc']['source_evidence'],{})
+
+class ConfigurationLimitDiscoveryTests(unittest.TestCase):
+    def test_renson_humidity_bounds_are_not_measurements(self):
+        cases = [
+            ('sensor.1fl_bathroom_1fl_vent_waves_humidity_static_maximum', '1fl-vent-waves Humidity static maximum'),
+            ('sensor.1fl_bathroom_1fl_vent_waves_humidity_static_minimum', '1fl-vent-waves Humidity static minimum'),
+            ('sensor.2fl_bathroom_2fl_vent_waves_humidity_dynamic_minimum', '2fl-vent-waves Humidity dynamic minimum'),
+            ('sensor.generic_humidity_max', 'Bedroom humidity max'),
+        ]
+        for entity, name in cases:
+            with self.subTest(entity=entity):
+                metric, reason = discovery.classify(entity, name, {'device_class': 'humidity', 'unit_of_measurement': '%'})
+                self.assertEqual(metric, 'humidity')
+                self.assertEqual(reason, discovery.CONFIGURATION_REASON)
+                self.assertFalse(discovery.is_default_eligible(metric, reason))
+        metric, reason = discovery.classify('sensor.2fl_vent_waves_humidity', '2fl-vent-waves Humidity',
+                                             {'device_class': 'humidity', 'unit_of_measurement': '%'})
+        self.assertEqual(metric, 'humidity')
+        self.assertTrue(discovery.is_default_eligible(metric, reason))
+
+    def test_user_override_cannot_force_monitoring_a_configuration_limit(self):
+        from datetime import datetime, timezone
+        states = [
+            SimpleNamespace(entity_id='sensor.x_humidity_static_maximum',
+                            name='Renson humidity static maximum',
+                            state='80', attributes={'device_class': 'humidity', 'unit_of_measurement': '%'},
+                            last_reported=datetime.now(timezone.utc)),
+            SimpleNamespace(entity_id='sensor.x_humidity',
+                            name='Renson humidity', state='54',
+                            attributes={'device_class': 'humidity', 'unit_of_measurement': '%'},
+                            last_reported=datetime.now(timezone.utc)),
+        ]
+        hass = SimpleNamespace(states=SimpleNamespace(async_all=lambda: states))
+        original = discovery.room_for
+        discovery.room_for = lambda h, e: 'Bathroom'
+        try:
+            found = discovery.discover(
+                hass, {'sensor.x_humidity_static_maximum': {'selection': 'include'}},
+                {'auto_include': True})
+        finally:
+            discovery.room_for = original
+        by_id = {r.entity_id: r for r in found}
+        self.assertFalse(by_id['sensor.x_humidity_static_maximum'].selected)
+        self.assertTrue(by_id['sensor.x_humidity'].selected)
