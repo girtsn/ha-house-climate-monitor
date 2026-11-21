@@ -60,7 +60,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(hass.bus.async_listen(EVENT_STATE_CHANGED, on_state))
     entry.async_on_unload(async_track_time_interval(hass, on_tick, timedelta(seconds=60)))
-    entry.async_on_unload(entry.add_update_listener(async_update_options))
+    # OptionsFlowWithReload owns reloading after settings are saved.
+    # Do NOT attach an update listener: Home Assistant rejects combining both.
     if not frontend.async_panel_exists(hass, PANEL_PATH):
         try:
             await panel_custom.async_register_panel(
@@ -73,10 +74,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except (ValueError, RuntimeError):
             _LOGGER.exception("Could not register Climate Monitor sidebar")
     return True
-
-
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
