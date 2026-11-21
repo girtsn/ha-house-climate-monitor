@@ -73,3 +73,57 @@ class OptionsFlowRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EntryUnloadRegressionTests(unittest.TestCase):
+    def test_unloading_without_nonexistent_config_entry_method(self):
+        """HA Core owns async_on_unload callbacks; integrations do not invoke them."""
+        src = ast.parse((ROOT / "__init__.py").read_text(encoding="utf-8"))
+        unload = next(node for node in src.body if isinstance(node, ast.AsyncFunctionDef)
+                      and node.name == "async_unload_entry")
+        unload.decorator_list = []
+        ast.fix_missing_locations(unload)
+        # Mimic the HA 2026.11 public ConfigEntry API, deliberately omitting
+        # async_unload_callbacks (which does not exist).
+        class FakeMonitor:
+            def __init__(self):
+                self.running = True
+                self.saved = False
+            async def save(self):
+                self.saved = True
+
+        class FakeFrontend:
+            def __init__(self):
+                self.panels = {"house-climate-monitor"}
+            def async_panel_exists(self, hass, path):
+                return path in self.panels
+            def async_remove_panel(self, hass, path):
+                self.panels.remove(path)
+
+        frontend = FakeFrontend()
+        monitor = FakeMonitor()
+        hass = SimpleNamespace(data={"house_climate_monitor": {"entry1": monitor}})
+        entry = SimpleNamespace(entry_id="entry1")
+        module = ast.Module(body=[unload], type_ignores=[])
+        namespace = {
+            "HomeAssistant": object, "ConfigEntry": object,
+            "DOMAIN": "house_climate_monitor",
+            "PANEL_PATH": "house-climate-monitor",
+            "frontend": frontend,
+        }
+        exec(compile(module, "__init__.py", "exec"), namespace)
+        result = asyncio.run(namespace["async_unload_entry"](hass, entry))
+        self.assertTrue(result)
+        self.assertTrue(monitor.saved)
+        self.assertFalse(monitor.running)
+        self.assertNotIn("entry1", hass.data["house_climate_monitor"])
+        self.assertFalse(frontend.panels)
+
+    def test_unload_callbacks_are_registered_but_not_invoked_by_integration(self):
+        src = (ROOT / "__init__.py").read_text(encoding="utf-8")
+        parsed = ast.parse(src)
+        names = [node.func.attr for node in ast.walk(parsed)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+        self.assertIn("async_on_unload", names)
+        self.assertNotIn("async_unload_callbacks", names)
+        self.assertNotIn("_async_process_on_unload", names)

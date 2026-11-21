@@ -81,7 +81,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if monitor:
         monitor.running = False
         await monitor.save()
-    entry.async_unload_callbacks()
+    # Home Assistant invokes entry.async_on_unload() callbacks after a
+    # successful unload. Do not call a nonexistent ConfigEntry method here.
     if frontend.async_panel_exists(hass, PANEL_PATH):
         frontend.async_remove_panel(hass, PANEL_PATH)
     return True
