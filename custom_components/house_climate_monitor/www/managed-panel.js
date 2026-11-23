@@ -85,23 +85,88 @@ const evidenceHTML=(key,state,sources,options)=>{
      : '<p class="sub">Recovery is not yet confirmed. Inspect the readings above for blockers.</p>';
  return `<p class="sub">Trigger: ${esc(state.last_reason||'Not recorded')}</p>${policy}<div class="evidence-list">${readings||'<p class="note">No selected source is currently reporting for this incident.</p>'}</div>${discrepancy}${recovery}`;
 };
-function getRange(mode,anchor=new Date(),offset=0){
- const now=new Date(),e=new Date(anchor),s=new Date(anchor),day=86400000;
- let length=7*day;
- if(mode==='48h')length=2*day;else if(mode==='30d')length=30*day;
- else if(mode==='90d')length=90*day;else if(mode==='365d')length=365*day;
- else if(mode==='3y')length=3*365*day;
- else if(mode==='today'){s.setHours(0,0,0,0);e.setTime(s.getTime()+day);length=day;}
- else if(mode==='yesterday'){s.setHours(0,0,0,0);s.setTime(s.getTime()-day);e.setTime(s.getTime()+day);length=day;}
- else if(mode==='week'){s.setHours(0,0,0,0);s.setDate(s.getDate()-((s.getDay()+6)%7));e.setTime(s.getTime()+7*day);length=7*day;}
- else if(mode==='month'){s.setDate(1);s.setHours(0,0,0,0);e.setFullYear(s.getFullYear(),s.getMonth()+1,1);length=e-s;}
- else if(mode==='year'){s.setMonth(0,1);s.setHours(0,0,0,0);e.setFullYear(s.getFullYear()+1);length=e-s;}
- if(!['today','yesterday','week','month','year'].includes(mode)){e.setTime(anchor.getTime());s.setTime(e.getTime()-length);}
- if(offset){s.setTime(s.getTime()+offset*length);e.setTime(e.getTime()+offset*length);}
- if(e>now)e.setTime(now.getTime());
- if(s>=e)s.setTime(e.getTime()-length);
- return {start:s.toISOString(),end:e.toISOString()};
+// Use HA-local calendar dates in every browser; UTC surrogate dates avoid DST arithmetic.
+const cmZone=hass=>hass?.config?.time_zone||'UTC';
+const cmCivil=(instant,hass)=>{
+ const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{
+  timeZone:cmZone(hass),year:'numeric',month:'2-digit',day:'2-digit'
+ }).formatToParts(instant).filter(x=>x.type!=='literal').map(x=>[x.type,+x.value]));
+ return new Date(Date.UTC(parts.year,parts.month-1,parts.day));
+};
+const cmAddDays=(date,n)=>new Date(date.getTime()+86400000*n);
+const cmFirstWeekday=hass=>{
+ const day=['sunday','monday','tuesday','wednesday','thursday','friday','saturday']
+  .indexOf(hass?.locale?.first_weekday);
+ if(day>=0)return day;
+ try{
+  const l=new Intl.Locale(hass?.locale?.language||hass?.language||'en-GB');
+  return (l.weekInfo?.firstDay??l.getWeekInfo?.().firstDay??1)%7;
+ }catch(_){return 1;}
+};
+const cmToUtc=(civil,hass)=>{
+ const target=civil.getTime();
+ const format=new Intl.DateTimeFormat('en-GB',{
+  timeZone:cmZone(hass),year:'numeric',month:'2-digit',day:'2-digit',
+  hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
+ });
+ let epoch=target;
+ for(let i=0;i<4;i++){
+  const p=Object.fromEntries(format.formatToParts(new Date(epoch))
+   .filter(x=>x.type!=='literal').map(x=>[x.type,+x.value]));
+  const step=target-Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute,p.second);
+  epoch+=step;if(step===0)break;
+ }
+ return new Date(epoch);
+};
+export function rangeForCalendarDays(first,last,hass=null){
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(first)||!/^\d{4}-\d{2}-\d{2}$/.test(last)||last<first)
+  throw new Error('Choose a valid date interval');
+ const start=new Date(first+'T00:00:00.000Z');
+ const inclusiveEnd=new Date(last+'T00:00:00.000Z');
+ if(Number.isNaN(start.getTime())||Number.isNaN(inclusiveEnd.getTime())||
+    start.toISOString().slice(0,10)!==first||inclusiveEnd.toISOString().slice(0,10)!==last)
+  throw new Error('Invalid calendar date');
+ const end=cmAddDays(inclusiveEnd,1);
+ if((end-start)/86400000>1099)throw new Error('Maximum range is 3 years');
+ return {start:cmToUtc(start,hass).toISOString(),end:cmToUtc(end,hass).toISOString()};
 }
+export function getRange(mode,anchor=new Date(),offset=0,hass=null){
+ const now=new Date();
+ const today=cmCivil(anchor,hass);
+ if(['today','yesterday','week','month','year'].includes(mode)){
+  let start,end;
+  const year=today.getUTCFullYear(),month=today.getUTCMonth();
+  if(mode==='today'||mode==='yesterday'){
+   start=cmAddDays(today,(mode==='yesterday'?-1:0)+offset);
+   end=cmAddDays(start,1);
+  }else if(mode==='week'){
+   const weekday=(today.getUTCDay()-cmFirstWeekday(hass)+7)%7;
+   start=cmAddDays(today,-weekday+7*offset);
+   end=cmAddDays(start,7);
+  }else if(mode==='month'){
+   start=new Date(Date.UTC(year,month+offset,1));
+   end=new Date(Date.UTC(year,month+offset+1,1));
+  }else{
+   start=new Date(Date.UTC(year+offset,0,1));
+   end=new Date(Date.UTC(year+offset+1,0,1));
+  }
+  let startTime=cmToUtc(start,hass),endTime=cmToUtc(end,hass);
+  if(endTime>now)endTime=now;
+  if(startTime>=endTime){startTime=cmToUtc(start,hass);endTime=cmToUtc(end,hass);}
+  return {start:startTime.toISOString(),end:endTime.toISOString()};
+ }
+ const day=86400000;
+ const lengths={'48h':2,'7d':7,'30d':30,'90d':90,'365d':365,'3y':1095};
+ const duration=(lengths[mode]||7)*day;
+ let end=new Date(anchor.getTime()+offset*duration);
+ if(end>now)end=now;
+ return {start:new Date(end.getTime()-duration).toISOString(),end:end.toISOString()};
+}
+const cmDayLabel=(instant,hass)=>new Intl.DateTimeFormat(
+ hass?.locale?.language||hass?.language||undefined,
+ {timeZone:cmZone(hass),day:'numeric',month:'short',year:'numeric'}
+).format(new Date(instant));
+const cmInputDate=(instant,hass)=>cmCivil(new Date(instant),hass).toISOString().slice(0,10);
 const CSS=`
 :host{display:block;color:var(--primary-text-color,#222);background:var(--primary-background-color,#fafafa);min-height:100%;font-family:Roboto,Arial,sans-serif}
 *{box-sizing:border-box}button,select,input{font:inherit}button{cursor:pointer;background:var(--card-background-color,#fff);color:inherit;border:1px solid var(--divider-color,#ddd);border-radius:8px;padding:7px 12px}button.active{background:var(--primary-color,#1976d2);color:#fff;border-color:transparent}
@@ -119,7 +184,7 @@ button:hover{filter:brightness(.96)}button:disabled{opacity:.5;cursor:not-allowe
 `;
 class HouseClimateMonitorPanel extends HTMLElement {
  constructor(){super();this.attachShadow({mode:'open'});this._hass=null;this._tab='Overview';this._mode='7d';this._offset=0;this._range=getRange('7d');this._data=null;this._room='';this._graph=null;this._busy=false;this._graphBusy=false;this._error='';this._timer=null;this._graphToken=0;this._narrow=false;this._customDates=null;}
- set hass(v){this._hass=v;if(this.isConnected&&!this._data)this._load();}
+ set hass(v){const old=cmZone(this._hass);this._hass=v;if(old!==cmZone(v)&&this._mode!=='custom')this._range=getRange(this._mode,new Date(),this._offset,v);if(this.isConnected&&!this._data)this._load();}
  set panel(v){this._panel=v;}
  set route(v){this._route=v;}
  set narrow(v){this._narrow=v;}
@@ -141,7 +206,7 @@ class HouseClimateMonitorPanel extends HTMLElement {
  }
  async _setSource(id,selection,room){try{await this._hass.callWS({type:'house_climate_monitor/source',entity_id:id,selection,...(room?{room}:{})});await this._load();}
   catch(e){alert('Could not save sensor setting: '+(e.message||e));}}
- _changeRange(){this._range=this._customDates||getRange(this._mode,new Date(),this._offset);this._graph=null;this._render();this._load();if(METRIC[this._tab])this._loadGraph();}
+ _changeRange(){this._range=this._customDates||getRange(this._mode,new Date(),this._offset,this._hass);this._graph=null;this._render();this._load();if(METRIC[this._tab])this._loadGraph();}
  async _loadGraph(){if(!this._hass?.callWS||!this._data)return;
   const metric=METRIC[this._tab];if(!metric)return;
   let selected=this._sources().filter(x=>x.selected&&x.metric===metric&&x.room===this._room);
@@ -171,7 +236,7 @@ class HouseClimateMonitorPanel extends HTMLElement {
   const y=p=>t+(max-p[1])/Math.max(.001,max-min)*(h-t-b);
   let paths=series.map(s=>`<polyline fill="none" stroke="${colors[s.i%colors.length]}" stroke-width="2" points="${s.points.map(p=>x(p).toFixed(1)+','+y(p).toFixed(1)).join(' ')}"/>`).join('');
   let labels=`<text x="3" y="20" fill="currentColor" font-size="12">${max.toFixed(1)}</text><text x="3" y="${h-30}" fill="currentColor" font-size="12">${min.toFixed(1)}</text>`;
-  return `<svg class="graph" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="History of ${esc(this._room)} sensors"><path d="M${l} ${t}V${h-b}H${w-r}" fill="none" stroke="currentColor" opacity=".25"/>${paths}${labels}<text x="${l}" y="${h-8}" font-size="12" fill="currentColor">${esc(new Date(start).toLocaleDateString())}</text><text x="${w-r-105}" y="${h-8}" font-size="12" fill="currentColor">${esc(new Date(end).toLocaleDateString())}</text></svg>`+
+  return `<svg class="graph" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="History of ${esc(this._room)} sensors"><path d="M${l} ${t}V${h-b}H${w-r}" fill="none" stroke="currentColor" opacity=".25"/>${paths}${labels}<text x="${l}" y="${h-8}" font-size="12" fill="currentColor">${esc(cmDayLabel(start,this._hass))}</text><text x="${w-r-105}" y="${h-8}" font-size="12" fill="currentColor">${esc(cmDayLabel(end-1,this._hass))}</text></svg>`+
    `<div class="legend">${series.map(s=>`<span><i class="dot" style="background:${colors[s.i%colors.length]}"></i>${esc(this._sources().find(r=>r.entity_id===s.id)?.name||s.id)} (${s.points.length} pts)</span>`).join('')}</div>`;
  }
  _tabOverview(){const sources=this._sources();const active=Object.entries(this._data?.incidents||{});
@@ -212,8 +277,8 @@ class HouseClimateMonitorPanel extends HTMLElement {
  }
  _override(id){return this._overrides?.[id]||'';}
  _rangeControls(){return `<div class="toolbar"><b>Period:</b><select data-role="period">${[['today','Today'],['yesterday','Yesterday'],['week','This week'],['month','This month'],['year','This year'],['48h','Last 48 hours'],['7d','Last 7 days'],['30d','Last 30 days'],['90d','Last 90 days'],['365d','Last 365 days'],['3y','Last 3 years'],['custom','Custom dates']].map(([id,name])=>`<option value="${id}" ${id===this._mode?'selected':''}>${name}</option>`).join('')}</select>
-  <button data-move="-1" title="Previous period">◀</button><button data-move="1" title="Next period">▶</button>${this._mode==='custom'?`<input type="date" data-role="from" value="${(this._customDates?.start||'').slice(0,10)}"><input type="date" data-role="to" value="${(this._customDates?.end||'').slice(0,10)}"><button data-role="apply">Apply</button>`:''}
-  <span class="sub">${esc(new Date(this._range.start).toLocaleDateString())} – ${esc(new Date(this._range.end).toLocaleDateString())}</span></div>`;}
+  <button data-move="-1" title="Previous period">◀</button><button data-move="1" title="Next period">▶</button>${this._mode==='custom'?`<input type="date" data-role="from" value="${(this._customDates?.start?cmInputDate(this._customDates.start,this._hass):'')}"><input type="date" data-role="to" value="${(this._customDates?.end?cmInputDate(Date.parse(this._customDates.end)-1,this._hass):'')}"><button data-role="apply">Apply</button><small class="sub">Leave the end date blank to select one day.</small>`:''}
+  <span class="sub">${esc(cmDayLabel(this._range.start,this._hass))} – ${esc(cmDayLabel(Date.parse(this._range.end)-1,this._hass))}</span></div>`;}
  _render(){const root=this.shadowRoot;
   if(!this._data){root.innerHTML='<style>'+CSS+'</style><div class="shell">Loading Climate Monitor... '+esc(this._error)+'</div>';return;}
   const other=this._tab==='Overview'?this._tabOverview():METRIC[this._tab]?this._tabMetric():this._tab==='Incidents'?this._tabIncidents():this._tabSensors();
@@ -226,10 +291,9 @@ class HouseClimateMonitorPanel extends HTMLElement {
   root.querySelectorAll('[data-move]').forEach(b=>b.addEventListener('click',()=>{this._offset+=Number(b.dataset.move);if(this._mode!=='custom')this._changeRange();}));
   root.querySelector('[data-role=apply]')?.addEventListener('click',()=>{
     const a=root.querySelector('[data-role=from]').value,b=root.querySelector('[data-role=to]').value;
-    if(!a||!b||a>b){alert('Choose a valid date interval');return;}
-    const start=new Date(a+'T00:00:00'),end=new Date(b+'T23:59:59');
-    if((end-start)>1099*86400000){alert('Maximum range is 3 years');return;}
-    this._customDates={start:start.toISOString(),end:end.toISOString()};this._changeRange();
+    if(!a||(b&&a>b)){alert('Choose a valid date interval');return;}
+    try{this._customDates=rangeForCalendarDays(a,b||a,this._hass);this._changeRange();}
+    catch(error){alert(error.message||String(error));}
   });
   root.querySelector('[data-role=refresh]')?.addEventListener('click',()=>this._load());
   root.querySelector('[data-role=test-email]')?.addEventListener('click',()=>this._testEmail());
