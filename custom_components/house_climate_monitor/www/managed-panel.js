@@ -85,8 +85,13 @@ const evidenceHTML=(key,state,sources,options)=>{
      : '<p class="sub">Recovery is not yet confirmed. Inspect the readings above for blockers.</p>';
  return `<p class="sub">Trigger: ${esc(state.last_reason||'Not recorded')}</p>${policy}<div class="evidence-list">${readings||'<p class="note">No selected source is currently reporting for this incident.</p>'}</div>${discrepancy}${recovery}`;
 };
-// Use HA-local calendar dates in every browser; UTC surrogate dates avoid DST arithmetic.
-const cmZone=hass=>hass?.config?.time_zone||'UTC';
+// Respect HA user profile: local = viewing device, server = HA location.
+// UTC surrogate dates continue to preserve 23/25-hour DST calendar days.
+const cmZone=hass=>{
+ const server=hass?.config?.time_zone||'UTC';
+ if(hass?.locale?.time_zone!=='local')return server;
+ return Intl.DateTimeFormat().resolvedOptions().timeZone||server;
+};
 const cmCivil=(instant,hass)=>{
  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{
   timeZone:cmZone(hass),year:'numeric',month:'2-digit',day:'2-digit'
@@ -184,7 +189,26 @@ button:hover{filter:brightness(.96)}button:disabled{opacity:.5;cursor:not-allowe
 `;
 class HouseClimateMonitorPanel extends HTMLElement {
  constructor(){super();this.attachShadow({mode:'open'});this._hass=null;this._tab='Overview';this._mode='7d';this._offset=0;this._range=getRange('7d');this._data=null;this._room='';this._graph=null;this._busy=false;this._graphBusy=false;this._error='';this._timer=null;this._graphToken=0;this._narrow=false;this._customDates=null;}
- set hass(v){const old=cmZone(this._hass);this._hass=v;if(old!==cmZone(v)&&this._mode!=='custom')this._range=getRange(this._mode,new Date(),this._offset,v);if(this.isConnected&&!this._data)this._load();}
+ set hass(v){
+  const previous=this._hass;
+  const oldZone=cmZone(previous);
+  this._hass=v;
+  if(oldZone!==cmZone(v)){
+   if(this._mode==='custom'&&this._customDates){
+    // Reinterpret selected civil dates under the new profile timezone.
+    const first=cmInputDate(this._customDates.start,previous);
+    const inclusiveEnd=cmInputDate(
+     new Date(Date.parse(this._customDates.end)-1),previous);
+    this._customDates=rangeForCalendarDays(first,inclusiveEnd,v);
+    this._range=this._customDates;
+   }else{
+    this._range=getRange(this._mode,new Date(),this._offset,v);
+   }
+   this._data=null;this._graph=null;this._graphToken++;
+   if(this.isConnected){this._render();this._load();return;}
+  }
+  if(this.isConnected&&!this._data)this._load();
+ }
  set panel(v){this._panel=v;}
  set route(v){this._route=v;}
  set narrow(v){this._narrow=v;}

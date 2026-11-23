@@ -45,5 +45,31 @@ globalThis.HTMLElement = class {};
   assert.equal(usWeek.start,'2026-11-22T05:00:00.000Z');
   assert.throws(()=>rangeForCalendarDays('2026-11-23','2026-11-22',ha));
 
+  const oldTZ=process.env.TZ;
+  try{
+    process.env.TZ='Europe/Riga';
+    const serverProfile={config:{time_zone:'Europe/Brussels'},
+      locale:{time_zone:'server',first_weekday:'monday',language:'en-GB'}};
+    const localProfile={config:{time_zone:'Europe/Brussels'},
+      locale:{time_zone:'local',first_weekday:'monday',language:'en-GB'}};
+    const calendarServer=rangeForCalendarDays('2026-11-22','2026-11-22',serverProfile);
+    const calendarLocal=rangeForCalendarDays('2026-11-22','2026-11-22',localProfile);
+    assert.equal(calendarServer.start,'2026-11-21T23:00:00.000Z');
+    assert.equal(calendarServer.end,'2026-11-22T23:00:00.000Z');
+    assert.equal(calendarLocal.start,'2026-11-21T22:00:00.000Z');
+    assert.equal(calendarLocal.end,'2026-11-22T22:00:00.000Z');
+    assert.deepEqual(getRange('yesterday',new Date('2026-11-22T23:30:00Z'),0,localProfile),
+      rangeForCalendarDays('2026-11-22','2026-11-22',localProfile));
+    const localSpring=rangeForCalendarDays('2026-03-29','2026-03-29',localProfile);
+    const localAutumn=rangeForCalendarDays('2026-10-25','2026-10-25',localProfile);
+    assert.equal(localSpring.start,'2026-03-28T22:00:00.000Z');
+    assert.equal(localAutumn.start,'2026-10-24T21:00:00.000Z');
+    assert.equal(Date.parse(localSpring.end)-Date.parse(localSpring.start),23*3600000);
+    assert.equal(Date.parse(localAutumn.end)-Date.parse(localAutumn.start),25*3600000);
+  }finally{
+    if(oldTZ===undefined)delete process.env.TZ;
+    else process.env.TZ=oldTZ;
+  }
+
   console.log('Home Assistant history response schema and decoding passed');
 })().catch(error => {console.error(error);process.exitCode = 1;});
