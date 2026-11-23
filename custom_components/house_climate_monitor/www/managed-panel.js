@@ -292,9 +292,8 @@ class HouseClimateMonitorPanel extends HTMLElement {
   root.querySelector('[data-role=apply]')?.addEventListener('click',()=>{
     const a=root.querySelector('[data-role=from]').value,b=root.querySelector('[data-role=to]').value;
     if(!a||(b&&a>b)){alert('Choose a valid date interval');return;}
-    const start=new Date(a+'T00:00:00'),end=new Date(b+'T23:59:59');
-    if((end-start)>1099*86400000){alert('Maximum range is 3 years');return;}
-    this._customDates={start:start.toISOString(),end:end.toISOString()};this._changeRange();
+    try{this._customDates=rangeForCalendarDays(a,b||a,this._hass);this._changeRange();}
+    catch(error){alert(error.message||String(error));}
   });
   root.querySelector('[data-role=refresh]')?.addEventListener('click',()=>this._load());
   root.querySelector('[data-role=test-email]')?.addEventListener('click',()=>this._testEmail());
